@@ -1,0 +1,19 @@
+os: linux
+language: python
+
+# Cache PlatformIO packages using Travis CI container-based infrastructure
+cache:
+  directories:
+    - "~/.platformio"
+    - $HOME/.cache/pip
+
+env:
+  - ENV=uno
+  - ENV=nano
+
+install:
+  - pip install -U platformio
+  - pio update
+
+script:
+  - pio run -e ${ENV}
