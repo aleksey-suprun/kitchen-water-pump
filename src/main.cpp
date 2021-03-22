@@ -1,18 +1,23 @@
 #include <Arduino.h>
 #include <OneButton.h>
 
-// Duration in ms for pouring a single unit of volume
-#define UNIT_VOLUME_DURATION 7000
+#define BTN_PIN 2          // main button pin
+#define BUZZER_PIN 3       // PWM pin for buzzer
+#define PUMP_PIN 7         // output pin for connecting to the pump circuit
+#define FLOW_SENSOR_PIN A5 // input pin for ACS712 sensor to mesure pump flow level
 
-// Main button pin
-#define BTN_PIN 2
+#define UNIT_VOLUME_DURATION 7000           // duration in ms for pouring a single unit of volume
+#define EXPLICIT_PUMP_WARMUP_DURATION 0     // additional time to "warmup" the pump (stabilize the flow)
+#define FLOW_LEVEL_BUFFER_SIZE 10           // number of the values to average
+#define EMPTY_TANK_FLOW_LEVEL_THRESHOLD 530 // flow level threshold to identify when tank is empty
 
-// Output pin for connecting to the pump circuit
-#define PUMP_PIN 3
-
-byte volume = 0;
-unsigned long pouringStartTime = 0;
-OneButton btn = OneButton(BTN_PIN, true, true);
+byte flowLevelBufferIdx = 0;                          // actual smoothing buffer index
+unsigned int flowLevelBuffer[FLOW_LEVEL_BUFFER_SIZE]; // buffer array for flow level values to calculate avg
+unsigned int flowLevelBufferSum = 0;                  // actual buffer sum
+bool flowLevelBufferFull = false;                     // shows if the buffer contains all values
+byte volume = 0;                                      // number of unit volumes to pour
+unsigned long pumpStartTime = 0;                      // pump start timestamp
+OneButton btn = OneButton(BTN_PIN, true, true);       // button object
 
 void onBtnClick();
 void onLongPressStart();
@@ -23,10 +28,15 @@ void startPouring(byte volume);
 void stopPouring();
 bool isPouring();
 bool isDone();
+bool isTankEmpty();
+int currentValue();
+void resetCurrentBuffer();
+void notifyEmptyTank();
 
 void setup()
 {
   pinMode(PUMP_PIN, OUTPUT);
+  pinMode(BUZZER_PIN, OUTPUT);
 
   digitalWrite(PUMP_PIN, LOW);
 
@@ -44,9 +54,16 @@ void loop()
 {
   btn.tick();
 
-  if (isDone())
+  if (isPouring() && isDone())
   {
+    Serial.println("Done");
     stopPouring();
+  }
+  else if (isPouring() && isTankEmpty())
+  {
+    Serial.println("Tank is emtpy");
+    stopPouring();
+    notifyEmptyTank();
   }
 }
 
@@ -85,23 +102,70 @@ void onDoubleClick()
 
 void startPouring(byte vol)
 {
-  pouringStartTime = millis();
+  resetCurrentBuffer(); // reset current sensor buffer
+
+  pumpStartTime = millis();
   volume = vol;
   digitalWrite(PUMP_PIN, HIGH);
 }
 
 void stopPouring()
 {
-  pouringStartTime = 0;
+  pumpStartTime = 0;
   digitalWrite(PUMP_PIN, LOW);
 }
 
 bool isPouring()
 {
-  return pouringStartTime > 0;
+  return pumpStartTime > 0;
 }
 
 bool isDone()
 {
-  return isPouring() && millis() - pouringStartTime >= UNIT_VOLUME_DURATION * volume;
+  return millis() - pumpStartTime >= UNIT_VOLUME_DURATION * volume;
+}
+
+bool isTankEmpty()
+{
+  return currentValue() < EMPTY_TANK_FLOW_LEVEL_THRESHOLD && millis() - pumpStartTime >= EXPLICIT_PUMP_WARMUP_DURATION && flowLevelBufferFull;
+}
+
+int currentValue()
+{
+  flowLevelBufferSum -= flowLevelBuffer[flowLevelBufferIdx];
+  flowLevelBuffer[flowLevelBufferIdx] = analogRead(FLOW_SENSOR_PIN);
+  Serial.print("current=");
+  Serial.println(flowLevelBuffer[flowLevelBufferIdx]);
+  flowLevelBufferSum += flowLevelBuffer[flowLevelBufferIdx];
+
+  if (++flowLevelBufferIdx == FLOW_LEVEL_BUFFER_SIZE)
+  {
+    flowLevelBufferIdx = 0;
+    flowLevelBufferFull = true;
+  }
+
+  return flowLevelBufferSum / FLOW_LEVEL_BUFFER_SIZE;
+}
+
+void resetCurrentBuffer()
+{
+  flowLevelBufferSum = 0;
+  flowLevelBufferIdx = 0;
+  flowLevelBufferFull = false;
+
+  for (int i = 0; i < FLOW_LEVEL_BUFFER_SIZE; i++)
+  {
+    flowLevelBuffer[i] = 0;
+  }
+}
+
+void notifyEmptyTank()
+{
+  for (int i = 0; i < 3; i++)
+  {
+    tone(BUZZER_PIN, 2000);
+    delay(1000);
+    noTone(BUZZER_PIN);
+    delay(500);
+  }
 }
