@@ -10,6 +10,7 @@
 #define EXPLICIT_PUMP_WARMUP_DURATION 0     // additional time to "warmup" the pump (stabilize the flow)
 #define FLOW_LEVEL_BUFFER_SIZE 10           // number of the values to average
 #define EMPTY_TANK_FLOW_LEVEL_THRESHOLD 530 // flow level threshold to identify when tank is empty
+#define SUBSEQUENT_POURING_DELAY 500       // delay between two separate pourings
 
 byte flowLevelBufferIdx = 0;                          // actual smoothing buffer index
 unsigned int flowLevelBuffer[FLOW_LEVEL_BUFFER_SIZE]; // buffer array for flow level values to calculate avg
@@ -32,6 +33,7 @@ bool isTankEmpty();
 int currentValue();
 void resetCurrentBuffer();
 void notifyEmptyTank();
+void notifySetupComplete();
 
 void setup()
 {
@@ -47,6 +49,7 @@ void setup()
   btn.attachMultiClick(onMultiClick);
 
   Serial.begin(9600);
+  notifySetupComplete();
   Serial.println("Setup finished");
 }
 
@@ -91,13 +94,27 @@ void onLongPressStop()
 
 void onMultiClick()
 {
-  int volume = btn.getNumberClicks();
-  startPouring(volume);
+  if (isPouring())
+  {
+    stopPouring();
+  }
+  else
+  {
+    int volume = btn.getNumberClicks();
+    startPouring(volume);
+  }
 }
 
 void onDoubleClick()
 {
-  startPouring(2);
+  if (isPouring())
+  {
+    stopPouring();
+  }
+  else
+  {
+    startPouring(2);
+  }
 }
 
 void startPouring(byte vol)
@@ -113,6 +130,7 @@ void stopPouring()
 {
   pumpStartTime = 0;
   digitalWrite(PUMP_PIN, LOW);
+  delay(SUBSEQUENT_POURING_DELAY);
 }
 
 bool isPouring()
@@ -127,15 +145,16 @@ bool isDone()
 
 bool isTankEmpty()
 {
-  return currentValue() < EMPTY_TANK_FLOW_LEVEL_THRESHOLD && millis() - pumpStartTime >= EXPLICIT_PUMP_WARMUP_DURATION && flowLevelBufferFull;
+  bool isCurrentLow = currentValue() < EMPTY_TANK_FLOW_LEVEL_THRESHOLD;
+  bool isCurrentStabilized = millis() - pumpStartTime >= EXPLICIT_PUMP_WARMUP_DURATION;
+
+  return isCurrentLow && isCurrentStabilized && flowLevelBufferFull;
 }
 
 int currentValue()
 {
   flowLevelBufferSum -= flowLevelBuffer[flowLevelBufferIdx];
   flowLevelBuffer[flowLevelBufferIdx] = analogRead(FLOW_SENSOR_PIN);
-  Serial.print("current=");
-  Serial.println(flowLevelBuffer[flowLevelBufferIdx]);
   flowLevelBufferSum += flowLevelBuffer[flowLevelBufferIdx];
 
   if (++flowLevelBufferIdx == FLOW_LEVEL_BUFFER_SIZE)
@@ -157,6 +176,13 @@ void resetCurrentBuffer()
   {
     flowLevelBuffer[i] = 0;
   }
+}
+
+void notifySetupComplete()
+{
+  tone(BUZZER_PIN, 2000);
+  delay(10);
+  noTone(BUZZER_PIN);
 }
 
 void notifyEmptyTank()
